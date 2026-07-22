@@ -1,0 +1,54 @@
+# AGERE simulation stack — PX4 + Gazebo Harmonic, and ROS 2 bridge.
+#
+# Run from inside WSL2 Ubuntu, with Docker Engine installed natively
+# (not via Docker Desktop's Windows integration) — see SETUP.md for why.
+#
+# Both services use network_mode: host. This is required for:
+#  - ROS 2 DDS discovery, which relies on UDP multicast that Docker's
+#    default bridge network does not forward cleanly.
+#  - The Micro XRCE-DDS Agent <-> PX4 uxrce_dds_client link (udp:8888).
+#  - QGroundControl (on native Windows) auto-connecting without extra
+#    port-mapping gymnastics.
+#
+# Host networking only behaves simply on native Linux — which is what
+# WSL2's Ubuntu distro is. This would NOT be a good idea run through
+# Docker Desktop on Windows directly.
+
+services:
+  px4-sitl-gazebo:
+    image: px4io/px4-sitl-gazebo:latest
+    container_name: agere-px4-sitl
+    network_mode: host
+    environment:
+      - PX4_SIM_MODEL=${PX4_SIM_MODEL:-gz_x500_depth}
+      - PX4_GZ_WORLD=${PX4_GZ_WORLD:-baylands}
+      - DISPLAY=${DISPLAY:-:0}
+    volumes:
+      # WSLg's X11 socket — this is what makes the Gazebo GUI actually
+      # render on your Windows desktop instead of needing its own
+      # display server.
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      # GPU render nodes — required for hardware-accelerated rendering
+      # inside the container rather than falling back to slow software
+      # rendering (llvmpipe). If Gazebo looks smooth already, this is
+      # already working; if it's laggy, check this mount is present and
+      # that `ls /dev/dri` on the WSL2 host shows renderD128 or similar.
+      - /dev/dri:/dev/dri
+    devices:
+      - /dev/dri
+    restart: unless-stopped
+
+  ros2-bridge:
+    build:
+      context: ./ros2
+    container_name: agere-ros2-bridge
+    network_mode: host
+    environment:
+      - XRCE_AGENT_PORT=8888
+    depends_on:
+      - px4-sitl-gazebo
+    # Keeps the container alive for `docker exec` sessions in addition
+    # to the DDS agent the entrypoint starts automatically.
+    stdin_open: true
+    tty: true
+    restart: unless-stopped
