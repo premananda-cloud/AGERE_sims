@@ -38,17 +38,33 @@ services:
       - /dev/dri
     restart: unless-stopped
 
+  # Micro XRCE-DDS Agent — bridges PX4's uxrce_dds_client to ROS 2 topics.
+  # Prebuilt image, not built from source: the source superbuild pulls
+  # Fast DDS via a moving branch ref that broke without warning when
+  # tested. `eprosima/micro-xrce-dds-agent` (the old image name) no
+  # longer exists on Docker Hub — the agent's prebuilt image now lives
+  # under the micro-ROS org instead, published by the same maintainer
+  # (pablogs9) who publishes eProsima's own Agent releases. Tags there
+  # track ROS 2 distro names rather than agent version numbers, so pin
+  # to `humble` to match the rest of this stack.
+  # https://hub.docker.com/r/microros/micro-ros-agent/tags
+  dds-agent:
+    image: microros/micro-ros-agent:humble
+    container_name: agere-dds-agent
+    network_mode: host
+    command: ["udp4", "-p", "8888"]
+    depends_on:
+      - px4-sitl-gazebo
+    restart: unless-stopped
+
   ros2-bridge:
     build:
       context: ./ros2
     container_name: agere-ros2-bridge
     network_mode: host
-    environment:
-      - XRCE_AGENT_PORT=8888
     depends_on:
-      - px4-sitl-gazebo
-    # Keeps the container alive for `docker exec` sessions in addition
-    # to the DDS agent the entrypoint starts automatically.
+      - dds-agent
+    # Keeps the container alive for `docker exec` sessions.
     stdin_open: true
     tty: true
     restart: unless-stopped

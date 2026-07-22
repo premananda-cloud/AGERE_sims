@@ -22,20 +22,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-humble-ros-gzharmonic \
     && rm -rf /var/lib/apt/lists/*
 
-# --- Micro XRCE-DDS Agent (bridges PX4 uORB <-> ROS 2 topics) ---
-# Pinned to a specific tag rather than a moving branch, for reproducibility.
-ARG XRCE_DDS_AGENT_VERSION=v2.4.2
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    git build-essential cmake \
-    && git clone -b ${XRCE_DDS_AGENT_VERSION} --depth 1 \
-       https://github.com/eProsima/Micro-XRCE-DDS-Agent.git /opt/Micro-XRCE-DDS-Agent \
-    && cd /opt/Micro-XRCE-DDS-Agent \
-    && mkdir build && cd build \
-    && cmake .. && make -j"$(nproc)" \
-    && make install && ldconfig /usr/local/lib/ \
-    && apt-get purge -y git build-essential cmake \
-    && apt-get autoremove -y \
-    && rm -rf /var/lib/apt/lists/* /opt/Micro-XRCE-DDS-Agent
+# Micro XRCE-DDS Agent is NOT built here — it runs as its own container
+# from eProsima's official prebuilt image (see docker-compose.yml). Its
+# source superbuild pulls Fast DDS via a moving branch ref that breaks
+# without warning (hit this directly: 'v2.4.2' resolved to a
+# fastdds branch, '2.12.x', that no longer exists upstream). Not worth
+# owning that fragility when a maintained image already exists.
 
 # px4_msgs is needed for ROS 2 nodes to interpret PX4 topics correctly.
 # Cloned + built here (not via apt) since it isn't packaged for Humble.
