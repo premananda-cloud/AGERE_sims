@@ -1,44 +1,72 @@
-# AGERE simulation stack — PX4 + Gazebo Harmonic, and ROS 2 bridge.
+# AGERE simulation stack — PX4 + Gazebo Harmonic only, for now.
+#
+# ROS 2 bridge and the Micro XRCE-DDS Agent are intentionally removed
+# from this file while we focus on getting GPU-accelerated Gazebo
+# rendering solid. Add them back once that's confirmed working — see
+# the project's earlier compose history / SETUP.md for the DDS/ROS 2
+# service definitions.
 #
 # Run from inside WSL2 Ubuntu, with Docker Engine installed natively
-# (not via Docker Desktop's Windows integration) — see SETUP.md for why.
-#
-# Both services use network_mode: host. This is required for:
-#  - ROS 2 DDS discovery, which relies on UDP multicast that Docker's
-#    default bridge network does not forward cleanly.
-#  - The Micro XRCE-DDS Agent <-> PX4 uxrce_dds_client link (udp:8888).
-#  - QGroundControl (on native Windows) auto-connecting without extra
-#    port-mapping gymnastics.
-#
-# Host networking only behaves simply on native Linux — which is what
-# WSL2's Ubuntu distro is. This would NOT be a good idea run through
-# Docker Desktop on Windows directly.
+# (not via Docker Desktop's Windows integration).
 
 services:
   px4-sitl-gazebo:
     image: px4io/px4-sitl-gazebo:latest
     container_name: agere-px4-sitl
     network_mode: host
+    # network_mode: host is required for PX4's MAVLink UDP streams and
+    # (later) ROS 2 DDS discovery to behave like ordinary Linux
+    # networking rather than sitting behind Docker's NAT.
+    stdin_open: true
+    tty: true
+    # Lets you reach the running PX4 shell (pxh>) with:
+    #   docker attach agere-px4-sitl
+    # Detach without killing it: Ctrl+P then Ctrl+Q.
     environment:
       - PX4_SIM_MODEL=${PX4_SIM_MODEL:-gz_x500_depth}
       - PX4_GZ_WORLD=${PX4_GZ_WORLD:-default}
       - DISPLAY=${DISPLAY:-:0}
-      # Required for the container to see/use the NVIDIA GPU exposed via
-      # the reservation block below.
+      # CUDA/compute path — confirmed working via `nvidia-smi` inside
+      # the container.
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=all
+      # OpenGL/GUI rendering under WSLg does NOT go through raw NVIDIA
+      # GLX libraries like it would on native Linux — WSLg renders
+      # GPU-accelerated GUI apps via Mesa's D3D12 driver talking to
+      # /dev/dxg. This points the dynamic linker at the WSL-provided
+      # Mesa/D3D12 libs mounted in below.
       - LD_LIBRARY_PATH=/usr/lib/wsl/lib
+      # Forces Mesa to actually pick the D3D12 backend — without this,
+      # Mesa's driver-selection logic still defaults to llvmpipe
+      # (software rendering) even with the libraries reachable.
+      - GALLIUM_DRIVER=d3d12
+      # On dual-GPU (laptop) machines, WSLg's D3D12 adapter enumeration
+      # otherwise defaults to the first-listed display adapter — often
+      # the integrated Intel GPU — rather than the discrete NVIDIA one.
+      # This forces Mesa to pick the adapter whose name contains
+      # "NVIDIA" instead. Confirmed needed here: without it, glxinfo
+      # reported "D3D12 (Intel(R) UHD Graphics 770)".
+      - MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA
     volumes:
-      # WSLg's X11 socket — this is what makes the Gazebo GUI actually
-      # render on your Windows desktop instead of needing its own
-      # display server.
+      # WSLg's X11 socket — lets the Gazebo GUI render on the Windows
+      # desktop.
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      # WSL's Mesa/D3D12 library stack. Once this + the env vars above
+      # + the /dev/dxg device below are all in place, expect
+      # `glxinfo | grep "OpenGL renderer"` to report something like
+      # "D3D12 (NVIDIA GeForce RTX 4070 ...)" — that IS hardware
+      # acceleration under WSLg, not a fallback. llvmpipe is the only
+      # "still not working" signal to watch for.
       - /usr/lib/wsl:/usr/lib/wsl
-      # NOTE: no /dev/dri mount here. That's the Mesa/DRM render-node
-      # path for native-Linux Intel/AMD GPUs, and it doesn't exist in
-      # WSL2 (WSL2 GPU passthrough uses /dev/dxg + the NVIDIA Container
-      # Toolkit instead). Mounting /dev/dri on this box errors with
-      # "not a device node" — use the GPU reservation below instead.
+      # NOTE: deliberately no /dev/dri mount. That's the Mesa/DRM
+      # render-node path for native-Linux Intel/AMD GPUs and doesn't
+      # exist in WSL2 — mounting it errors with "not a device node".
+    devices:
+      # The actual DirectX/GPU device node WSL2 exposes. The library
+      # mount above is necessary but not sufficient on its own —
+      # without this device present, the D3D12 Mesa driver has nothing
+      # to talk to and rendering silently falls back to llvmpipe.
+      - /dev/dxg:/dev/dxg
     deploy:
       resources:
         reservations:
@@ -46,35 +74,4 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
-    restart: unless-stopped
-
-  # Micro XRCE-DDS Agent — bridges PX4's uxrce_dds_client to ROS 2 topics.
-  # Prebuilt image, not built from source: the source superbuild pulls
-  # Fast DDS via a moving branch ref that broke without warning when
-  # tested. `eprosima/micro-xrce-dds-agent` (the old image name) no
-  # longer exists on Docker Hub — the agent's prebuilt image now lives
-  # under the micro-ROS org instead, published by the same maintainer
-  # (pablogs9) who publishes eProsima's own Agent releases. Tags there
-  # track ROS 2 distro names rather than agent version numbers, so pin
-  # to `humble` to match the rest of this stack.
-  # https://hub.docker.com/r/microros/micro-ros-agent/tags
-  dds-agent:
-    image: microros/micro-ros-agent:humble
-    container_name: agere-dds-agent
-    network_mode: host
-    command: ["udp4", "-p", "8888"]
-    depends_on:
-      - px4-sitl-gazebo
-    restart: unless-stopped
-
-  ros2-bridge:
-    build:
-      context: ./ros2
-    container_name: agere-ros2-bridge
-    network_mode: host
-    depends_on:
-      - dds-agent
-    # Keeps the container alive for `docker exec` sessions.
-    stdin_open: true
-    tty: true
     restart: unless-stopped
