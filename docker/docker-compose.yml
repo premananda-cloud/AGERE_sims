@@ -21,12 +21,22 @@ services:
     network_mode: host
     environment:
       - PX4_SIM_MODEL=${PX4_SIM_MODEL:-gz_x500_depth}
-      - PX4_GZ_WORLD=${PX4_GZ_WORLD:-baylands}
+      - PX4_GZ_WORLD=${PX4_GZ_WORLD:-default}
       - DISPLAY=${DISPLAY:-:0}
+      # Required for the container to see/use the NVIDIA GPU exposed via
+      # the reservation block below.
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=all
     volumes:
+      # WSLg's X11 socket — this is what makes the Gazebo GUI actually
+      # render on your Windows desktop instead of needing its own
+      # display server.
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      # NOTE: no /dev/dri mount here. That's the Mesa/DRM render-node
+      # path for native-Linux Intel/AMD GPUs, and it doesn't exist in
+      # WSL2 (WSL2 GPU passthrough uses /dev/dxg + the NVIDIA Container
+      # Toolkit instead). Mounting /dev/dri on this box errors with
+      # "not a device node" — use the GPU reservation below instead.
     deploy:
       resources:
         reservations:
