@@ -92,12 +92,65 @@ already provides a real, working X11 socket inside the WSL2 filesystem
 standard, well-trodden Linux Docker-GUI pattern — not the broken
 Windows-Docker-Desktop path that caused problems earlier in this project.
 
-**Worth verifying, not assuming:** whether the container is getting
-hardware-accelerated rendering or falling back to slow software
-rendering (llvmpipe) depends on `/dev/dri` (the GPU render node) being
-mounted through as well — see the compose file. If Gazebo is already
-running smoothly, that's a good sign it's already accelerated; if it's
-laggy, check that mount first.
+### GPU-accelerated rendering: NVIDIA + WSL2 needs a different path than /dev/dri
+
+**This section was rewritten after hands-on debugging on 2026-07-23** —
+the original assumption below (Intel/AMD Mesa via `/dev/dri`) is wrong
+for a machine with an NVIDIA GPU, which is what this project actually
+runs on. Documented here so the mistake isn't repeated.
+
+If the machine has an **Intel or AMD GPU**, the earlier assumption
+holds: mount `/dev/dri` (the Mesa/DRM render node) into the container
+and hardware acceleration works the same way it would on native Linux.
+
+If the machine has an **NVIDIA GPU** (as this one does — an RTX 4070),
+`/dev/dri` **does not exist in WSL2** and mounting it fails outright
+with `error gathering device information while adding custom device
+"/dev/dri": not a device node`. NVIDIA GPU passthrough into WSL2 uses a
+completely different mechanism, and it splits into two separate paths
+that must both be set up:
+
+1. **CUDA/compute** — works via the NVIDIA Container Toolkit installed
+   on the WSL2 host (`nvidia-ctk runtime configure --runtime=docker`)
+   plus a GPU reservation in the compose file. This alone is enough to
+   make `nvidia-smi` work inside the container — but it does **not**
+   give you OpenGL/GUI rendering. These are separate paths, and having
+   one work is not evidence the other works.
+2. **OpenGL/GUI rendering** — WSLg does not use native NVIDIA GLX
+   drivers at all. It renders GPU-accelerated GUI apps through **Mesa's
+   D3D12 gallium driver**, talking to the `/dev/dxg` device (WSL2's
+   DirectX-on-Linux device node). Getting this working end-to-end
+   requires, all at once:
+   - Mounting `/usr/lib/wsl` (WSL's Mesa/D3D12 library stack) into the
+     container, and pointing the dynamic linker at it:
+     `LD_LIBRARY_PATH=/usr/lib/wsl/lib`.
+   - Mounting the `/dev/dxg` device itself — the library mount alone
+     gives the container the code to speak D3D12 but nothing to talk
+     to.
+   - `GALLIUM_DRIVER=d3d12` — without this, Mesa's driver-selection
+     logic still silently picks `llvmpipe` (software rendering), even
+     with the libraries and device present and reachable.
+   - **On laptops with a dual GPU (integrated + discrete)**:
+     `MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA`. Without this, WSLg's
+     D3D12 adapter enumeration defaults to the first-listed display
+     adapter — which is usually the integrated GPU. Confirmed on this
+     machine: without the var, `glxinfo` reported
+     `D3D12 (Intel(R) UHD Graphics 770)`; with it,
+     `D3D12 (NVIDIA GeForce RTX 4070 SUPER)`.
+
+**How to verify which path you're actually on, in order:**
+```bash
+nvidia-smi                                  # confirms CUDA/compute path
+docker exec -it agere-px4-sitl bash
+apt update && apt install -y mesa-utils
+glxinfo | grep "OpenGL renderer"            # confirms OpenGL/GUI path
+```
+Expect `D3D12 (NVIDIA GeForce ...)` — that string **is** hardware
+acceleration under WSLg, not a fallback. It will never say bare
+`NVIDIA GeForce ...` the way native Linux does. `llvmpipe` is the only
+"still not working" signal, and a D3D12 string naming the *wrong* GPU
+(e.g. the integrated one) means the adapter-name env var above is
+missing.
 
 ## Version stack
 
@@ -105,13 +158,15 @@ laggy, check that mount first.
 |---|---|---|
 | OS | Windows 11 (stable) | Required for WSLg GUI + GPU passthrough. |
 | WSL | WSL2 | Not WSL1. |
-| Linux distro | Ubuntu 22.04 (Jammy) | Matches PX4's recommended ROS 2 platform. |
+| Linux distro | Ubuntu 24.04 (Noble) | Actual distro in use as of 2026-07-23; earlier plan targeted 22.04 (Jammy) for PX4's recommended ROS 2 platform — revisit compatibility if/when ROS 2 is reintroduced. |
+| GPU | NVIDIA GeForce RTX 4070 SUPER (laptop, dual-GPU with Intel UHD 770) | Confirmed via `nvidia-smi` (CUDA path) and `glxinfo` (OpenGL/D3D12 path) on 2026-07-23. See GPU rendering section above — this is NOT an Intel/AMD `/dev/dri` setup. |
 | Container runtime | Docker Engine, installed natively inside WSL2 | Not Docker Desktop's Windows integration — see rationale above. |
+| GPU container support | NVIDIA Container Toolkit | Installed on the WSL2 host; required for both the CUDA/compute reservation and (combined with the D3D12 env vars/mounts above) OpenGL rendering. |
 | PX4 + Simulator | `px4io/px4-sitl-gazebo:latest` | Official prebuilt image; PX4 + Gazebo Harmonic + full sensor suite (camera, LiDAR, depth). |
-| ROS 2 | Humble Hawksbill (LTS), containerized | Built from `ros:humble-ros-base` in `docker/ros2/Dockerfile`. |
-| ROS 2 ↔ Gazebo bridge | `ros-humble-ros-gzharmonic` | Matches the Gazebo Harmonic version in the PX4 image. |
-| Middleware bridge | `microros/micro-ros-agent:humble` | Prebuilt image, tagged by ROS 2 distro (`eprosima/micro-xrce-dds-agent` no longer exists on Docker Hub) — see note below on why this isn't built from source. |
-| Ground control | QGroundControl (Windows build) | Runs natively on Windows; connects over the network — not inside WSL2. |
+| ROS 2 | Humble Hawksbill (LTS), containerized | **Temporarily removed from `docker-compose.yml`** as of 2026-07-23 to isolate and confirm GPU rendering. Was built from `ros:humble-ros-base` in `docker/ros2/Dockerfile` — reintroduce once GPU work is stable. |
+| ROS 2 ↔ Gazebo bridge | `ros-humble-ros-gzharmonic` | Matches the Gazebo Harmonic version in the PX4 image. Not currently running (see above). |
+| Middleware bridge | `microros/micro-ros-agent:humble` | **Temporarily removed from `docker-compose.yml`** as of 2026-07-23, same reason as ROS 2. Prebuilt image, tagged by ROS 2 distro (`eprosima/micro-xrce-dds-agent` no longer exists on Docker Hub). |
+| Ground control | QGroundControl (Windows build) | **Parked as of 2026-07-23** — see Troubleshooting log below. Runs natively on Windows; connects over the network — not inside WSL2. |
 
 ## Prerequisites
 
@@ -189,9 +244,28 @@ Install QGroundControl natively on Windows. With host networking and
 WSL2's mirrored networking mode, it should auto-detect the vehicle
 without extra configuration.
 
-## Open item
+## Current checkpoint (2026-07-23)
 
-The RL model (native Windows) → WSL2/Docker network path hasn't been
-exercised yet. This covers getting the simulator loop itself running;
-wiring the RL model in is the next step — see the main repo's planning
-docs for sequencing.
+**Working:**
+- PX4 SITL + Gazebo (default world) running with confirmed GPU-accelerated
+  rendering (`D3D12 (NVIDIA GeForce RTX 4070 SUPER)`).
+- Console control confirmed: `docker attach agere-px4-sitl` → `pxh>` shell
+  → `commander arm -f` → `commander takeoff` works.
+- `docker-compose.yml` is currently minimal — only the `px4-sitl-gazebo`
+  service. ROS 2 bridge and the DDS agent are removed for now, not broken;
+  see full details and next steps in `2026-07-23.md`.
+
+**Open / parked:**
+- Python scripting (MAVSDK) over `udpin://0.0.0.0:14540` — connection
+  string fixed, but not yet confirmed receiving packets. Suspect the
+  `partner IP: 192.168.1.103` shown in `mavlink status` (instead of
+  `127.0.0.1`) is relevant.
+- QGroundControl-from-Windows networking — dead-ended on the
+  `MAV_i_BROADCAST` param approach (this image starts its 4 MAVLink
+  streams via direct `mavlink start` shell commands, not the numbered
+  param-config system, so the params don't do anything). Would need the
+  real `mavlink start --help` flags from inside the container to pursue
+  further.
+- ROS 2 / DDS agent reintroduction, once GPU + Python control are solid.
+
+See `2026-07-23.md` for the full session log.
