@@ -23,19 +23,17 @@ services:
       - PX4_SIM_MODEL=${PX4_SIM_MODEL:-gz_x500_depth}
       - PX4_GZ_WORLD=${PX4_GZ_WORLD:-baylands}
       - DISPLAY=${DISPLAY:-:0}
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
     volumes:
-      # WSLg's X11 socket — this is what makes the Gazebo GUI actually
-      # render on your Windows desktop instead of needing its own
-      # display server.
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
-      # GPU render nodes — required for hardware-accelerated rendering
-      # inside the container rather than falling back to slow software
-      # rendering (llvmpipe). If Gazebo looks smooth already, this is
-      # already working; if it's laggy, check this mount is present and
-      # that `ls /dev/dri` on the WSL2 host shows renderD128 or similar.
-      - /dev/dri:/dev/dri
-    devices:
-      - /dev/dri
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
     restart: unless-stopped
 
   # Micro XRCE-DDS Agent — bridges PX4's uxrce_dds_client to ROS 2 topics.
