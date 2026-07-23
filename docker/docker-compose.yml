@@ -27,6 +27,7 @@ services:
       # the reservation block below.
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=all
+      - LD_LIBRARY_PATH=/usr/lib/wsl/lib
     volumes:
       # WSLg's X11 socket — this is what makes the Gazebo GUI actually
       # render on your Windows desktop instead of needing its own
@@ -38,8 +39,6 @@ services:
       # WSL2 (WSL2 GPU passthrough uses /dev/dxg + the NVIDIA Container
       # Toolkit instead). Mounting /dev/dri on this box errors with
       # "not a device node" — use the GPU reservation below instead.
-    environment:
-      - LD_LIBRARY_PATH=/usr/lib/wsl/lib
     deploy:
       resources:
         reservations:
