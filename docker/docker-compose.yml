@@ -1,77 +1,28 @@
-# AGERE simulation stack — PX4 + Gazebo Harmonic only, for now.
+# AGERE simulation stack — PX4 + Gazebo Harmonic
+# Native Linux version for Intel integrated graphics (no NVIDIA)
 #
-# ROS 2 bridge and the Micro XRCE-DDS Agent are intentionally removed
-# from this file while we focus on getting GPU-accelerated Gazebo
-# rendering solid. Add them back once that's confirmed working — see
-# the project's earlier compose history / SETUP.md for the DDS/ROS 2
-# service definitions.
-#
-# Run from inside WSL2 Ubuntu, with Docker Engine installed natively
-# (not via Docker Desktop's Windows integration).
+# Run from project root with:
+#   docker compose up -d
 
 services:
   px4-sitl-gazebo:
     image: px4io/px4-sitl-gazebo:latest
     container_name: agere-px4-sitl
     network_mode: host
-    # network_mode: host is required for PX4's MAVLink UDP streams and
-    # (later) ROS 2 DDS discovery to behave like ordinary Linux
-    # networking rather than sitting behind Docker's NAT.
     stdin_open: true
     tty: true
-    # Lets you reach the running PX4 shell (pxh>) with:
-    #   docker attach agere-px4-sitl
-    # Detach without killing it: Ctrl+P then Ctrl+Q.
     environment:
       - PX4_SIM_MODEL=${PX4_SIM_MODEL:-gz_x500_depth}
       - PX4_GZ_WORLD=${PX4_GZ_WORLD:-default}
       - DISPLAY=${DISPLAY:-:0}
-      # CUDA/compute path — confirmed working via `nvidia-smi` inside
-      # the container.
-      - NVIDIA_VISIBLE_DEVICES=all
-      - NVIDIA_DRIVER_CAPABILITIES=all
-      # OpenGL/GUI rendering under WSLg does NOT go through raw NVIDIA
-      # GLX libraries like it would on native Linux — WSLg renders
-      # GPU-accelerated GUI apps via Mesa's D3D12 driver talking to
-      # /dev/dxg. This points the dynamic linker at the WSL-provided
-      # Mesa/D3D12 libs mounted in below.
-      - LD_LIBRARY_PATH=/usr/lib/wsl/lib
-      # Forces Mesa to actually pick the D3D12 backend — without this,
-      # Mesa's driver-selection logic still defaults to llvmpipe
-      # (software rendering) even with the libraries reachable.
-      - GALLIUM_DRIVER=d3d12
-      # On dual-GPU (laptop) machines, WSLg's D3D12 adapter enumeration
-      # otherwise defaults to the first-listed display adapter — often
-      # the integrated Intel GPU — rather than the discrete NVIDIA one.
-      # This forces Mesa to pick the adapter whose name contains
-      # "NVIDIA" instead. Confirmed needed here: without it, glxinfo
-      # reported "D3D12 (Intel(R) UHD Graphics 770)".
-      - MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA
+      - QT_X11_NO_MITSHM=1
+      # For Intel integrated graphics rendering
+      - LIBGL_ALWAYS_SOFTWARE=0
+      - MESA_GL_VERSION_OVERRIDE=3.3
     volumes:
-      # WSLg's X11 socket — lets the Gazebo GUI render on the Windows
-      # desktop.
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
-      # WSL's Mesa/D3D12 library stack. Once this + the env vars above
-      # + the /dev/dxg device below are all in place, expect
-      # `glxinfo | grep "OpenGL renderer"` to report something like
-      # "D3D12 (NVIDIA GeForce RTX 4070 ...)" — that IS hardware
-      # acceleration under WSLg, not a fallback. llvmpipe is the only
-      # "still not working" signal to watch for.
-      - /usr/lib/wsl:/usr/lib/wsl
-      # NOTE: deliberately no /dev/dri mount. That's the Mesa/DRM
-      # render-node path for native-Linux Intel/AMD GPUs and doesn't
-      # exist in WSL2 — mounting it errors with "not a device node".
+      - ${XAUTHORITY:-$HOME/.Xauthority}:/root/.Xauthority:ro
     devices:
-      # The actual DirectX/GPU device node WSL2 exposes. The library
-      # mount above is necessary but not sufficient on its own —
-      # without this device present, the D3D12 Mesa driver has nothing
-      # to talk to and rendering silently falls back to llvmpipe.
-      - /dev/dxg:/dev/dxg
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
+      - /dev/dri:/dev/dri
+    # Remove restart if you want manual control
     restart: unless-stopped
