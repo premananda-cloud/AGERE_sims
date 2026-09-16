@@ -37,21 +37,17 @@ from stable_baselines3 import PPO
 SYSTEM_ADDRESS = "udpin://0.0.0.0:14540"
 TARGET_ALTITUDE_M = 1.0          # matches HoverTaskConfig.target_position z (0,0,1.0)
 EPISODE_DURATION_S = 30.0        # how long to run RL control before landing
-CONTROL_RATE_HZ = 20.0           # VERIFY #3 below -- see note
+CONTROL_RATE_HZ = 30.0           # confirmed: HoverAviary.CTRL_FREQ == 30
 
-# VERIFY #1: gym-pybullet-drones' VEL action type scales `speed` (the 4th
-# raw action value, in [0,1]) by an internal SPEED_LIMIT, not by 1.0 m/s
-# directly. Find the real value with:
-#
-#   python3 -c "
-#   from gym_pybullet_drones.envs.HoverAviary import HoverAviary
-#   from gym_pybullet_drones.utils.enums import ActionType, ObservationType, DroneModel, Physics
-#   env = HoverAviary(drone_model=DroneModel.CF2X, physics=Physics.PYB,
-#                      obs=ObservationType.KIN, act=ActionType.VEL)
-#   print(env.SPEED_LIMIT)"
-#
-# and paste it in here. Placeholder below is a guess, not a measurement.
-MAX_SPEED_MPS = 1.0  # <-- VERIFY, see above
+# Confirmed via HoverAviary.SPEED_LIMIT (CF2X drone model, PYB physics):
+#   SPEED_LIMIT: 0.25 m/s
+#   CTRL_FREQ:   30 Hz
+# (previously a 1.0 m/s / 20 Hz placeholder -- the 4x-too-high speed limit
+# was almost certainly why the SITL flight bounced around 0.1-0.35m instead
+# of converging like the sim eval's 0.015-0.025m: a policy trained to output
+# gentle 0.25 m/s-max corrections, given 4x the authority, overshoots every
+# correction it makes.)
+MAX_SPEED_MPS = 0.25
 
 
 # ---------------------------------------------------------------------------
