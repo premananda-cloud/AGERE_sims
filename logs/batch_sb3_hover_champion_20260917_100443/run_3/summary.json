@@ -1,0 +1,23 @@
+{
+  "timestamp_utc": "2026-09-17T10:07:41.222111+00:00",
+  "loader": "sb3",
+  "model_path": "../model/hover_champion.zip",
+  "model_sha256": "4a68b97b82a4f74ca93419aae501886ed092f75461a57e83d59076fb3e2d9660",
+  "control_rate_hz": 30.0,
+  "max_speed_mps": 0.25,
+  "episode_duration_s": 30.0,
+  "target_altitude_m": 1.0,
+  "target_xyz_train_frame": [
+    0.2818199396133423,
+    0.1578022539615631,
+    0.8750367164611816
+  ],
+  "n_steps": 881,
+  "pos_error_mean_m": 0.05682191523912529,
+  "pos_error_std_m": 0.019063946746427994,
+  "pos_error_min_m": 0.0070949760265648365,
+  "pos_error_max_m": 0.11208051443099976,
+  "pos_error_rmse_m": 0.05993466540319534,
+  "steady_state_mean_m": 0.06089987638332541,
+  "steady_state_std_m": 0.019114030446885522
+}
