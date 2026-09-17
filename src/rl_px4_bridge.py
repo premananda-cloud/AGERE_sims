@@ -15,6 +15,11 @@ each one is currently a best-guess.
 
 Usage:
     python rl_px4_bridge.py --model /path/to/hover_champion.zip
+    python rl_px4_bridge.py --model /path/to/hover_champion.zip --log-dir ../logs/run_1
+
+With --log-dir, writes two files per run for later analysis/paper use:
+    <log-dir>/steps.csv    -- one row per control step (30 Hz)
+    <log-dir>/summary.json -- run metadata + summary stats
 
 Assumes PX4 SITL + Gazebo is already running and reachable at
 udpin://0.0.0.0:14540 (same as your working test_flight.py).
@@ -22,7 +27,12 @@ udpin://0.0.0.0:14540 (same as your working test_flight.py).
 
 import argparse
 import asyncio
+import csv
+import hashlib
+import json
+import os
 import time
+from datetime import datetime, timezone
 
 import numpy as np
 from mavsdk import System
@@ -159,9 +169,23 @@ def action_to_ned_velocity(raw_action: np.ndarray, current_yaw_deg: float):
 # Main flow
 # ---------------------------------------------------------------------------
 
-async def run(model_path: str):
+def sha256_of_file(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(8192), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+async def run(model_path: str, log_dir: str | None):
     print(f"Loading policy from {model_path} ...")
     model = PPO.load(model_path, device="cpu")
+
+    step_rows = []
+    csv_path = None
+    if log_dir:
+        os.makedirs(log_dir, exist_ok=True)
+        csv_path = os.path.join(log_dir, "steps.csv")
 
     drone = System()
     await drone.connect(system_address=SYSTEM_ADDRESS)
@@ -226,6 +250,7 @@ async def run(model_path: str):
     try:
         while time.monotonic() - start < EPISODE_DURATION_S:
             loop_start = time.monotonic()
+            t_s = loop_start - start
 
             obs = build_observation(cache, target_xyz)
             raw_action, _ = model.predict(obs, deterministic=True)
@@ -235,10 +260,34 @@ async def run(model_path: str):
             await offboard.set_velocity_ned(setpoint)
 
             step_count += 1
+            pos = ned_position_to_train_frame(*cache.position_ned)
+            pos_error = float(np.linalg.norm(target_xyz - pos))
+
+            if log_dir is not None:
+                step_rows.append({
+                    "step": step_count,
+                    "t_s": round(t_s, 4),
+                    "north_m": cache.position_ned[0],
+                    "east_m": cache.position_ned[1],
+                    "down_m": cache.position_ned[2],
+                    "vn_m_s": cache.velocity_ned[0],
+                    "ve_m_s": cache.velocity_ned[1],
+                    "vd_m_s": cache.velocity_ned[2],
+                    "roll_rad": cache.attitude_rpy_rad[0],
+                    "pitch_rad": cache.attitude_rpy_rad[1],
+                    "yaw_rad": cache.attitude_rpy_rad[2],
+                    "pos_error_m": pos_error,
+                    "raw_action_0": float(raw_action[0]),
+                    "raw_action_1": float(raw_action[1]),
+                    "raw_action_2": float(raw_action[2]),
+                    "raw_action_3": float(raw_action[3]),
+                    "cmd_vn_m_s": setpoint.north_m_s,
+                    "cmd_ve_m_s": setpoint.east_m_s,
+                    "cmd_vd_m_s": setpoint.down_m_s,
+                })
+
             if step_count % int(CONTROL_RATE_HZ) == 0:
-                pos = ned_position_to_train_frame(*cache.position_ned)
-                err = np.linalg.norm(target_xyz - pos)
-                print(f"  t={time.monotonic()-start:5.1f}s  pos_error={err:.3f} m")
+                print(f"  t={t_s:5.1f}s  pos_error={pos_error:.3f} m")
 
             elapsed = time.monotonic() - loop_start
             await asyncio.sleep(max(0.0, dt - elapsed))
@@ -259,12 +308,45 @@ async def run(model_path: str):
                 print("Landed")
                 break
 
+        if log_dir is not None and step_rows:
+            with open(csv_path, "w", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=list(step_rows[0].keys()))
+                writer.writeheader()
+                writer.writerows(step_rows)
+            print(f"Wrote {len(step_rows)} step rows to {csv_path}")
+
+            errs = np.array([r["pos_error_m"] for r in step_rows])
+            second_half = errs[len(errs) // 2:]
+            summary = {
+                "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+                "loader": "sb3",
+                "model_path": model_path,
+                "model_sha256": sha256_of_file(model_path),
+                "control_rate_hz": CONTROL_RATE_HZ,
+                "max_speed_mps": MAX_SPEED_MPS,
+                "episode_duration_s": EPISODE_DURATION_S,
+                "target_altitude_m": TARGET_ALTITUDE_M,
+                "target_xyz_train_frame": target_xyz.tolist(),
+                "n_steps": len(step_rows),
+                "pos_error_mean_m": float(errs.mean()),
+                "pos_error_std_m": float(errs.std()),
+                "pos_error_min_m": float(errs.min()),
+                "pos_error_max_m": float(errs.max()),
+                "pos_error_rmse_m": float(np.sqrt(np.mean(errs ** 2))),
+                "steady_state_mean_m": float(second_half.mean()),
+                "steady_state_std_m": float(second_half.std()),
+            }
+            with open(os.path.join(log_dir, "summary.json"), "w") as f:
+                json.dump(summary, f, indent=2)
+            print(f"Wrote summary to {os.path.join(log_dir, 'summary.json')}")
+
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", required=True, help="Path to hover_champion.zip")
+    parser.add_argument("--log-dir", default=None, help="If set, write steps.csv + summary.json here")
     args = parser.parse_args()
-    asyncio.run(run(args.model))
+    asyncio.run(run(args.model, args.log_dir))
 
 
 if __name__ == "__main__":

@@ -24,20 +24,40 @@ import sys
 import time
 
 
+# Maps known bridge script filenames to a short tag used in output naming.
+# Falls back to the script's filename (minus .py) for anything else.
+KNOWN_LOADER_TAGS = {
+    "rl_px4_bridge.py": "sb3",
+    "rl_px4_bridge_numpy.py": "numpy",
+}
+
+
+def infer_tag(bridge_script: str) -> str:
+    basename = os.path.basename(bridge_script)
+    return KNOWN_LOADER_TAGS.get(basename, os.path.splitext(basename)[0])
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", required=True, help="Path to hover_policy.npz")
+    parser.add_argument("--model", required=True, help="Path to hover_champion.zip or hover_policy.npz")
     parser.add_argument("--runs", type=int, default=3, help="Number of runs")
     parser.add_argument("--out-dir", default="../logs", help="Where to store per-run logs + aggregate")
     parser.add_argument("--pause-between-s", type=float, default=15.0,
                          help="Rest between runs, lets the sim settle after landing")
     parser.add_argument("--bridge-script", default="rl_px4_bridge_numpy.py",
                          help="Path to the bridge script to invoke")
+    parser.add_argument("--tag", default=None,
+                         help="Label for this batch (default: inferred from --bridge-script, "
+                              "e.g. 'sb3' or 'numpy')")
     args = parser.parse_args()
 
+    tag = args.tag or infer_tag(args.bridge_script)
+    model_stem = os.path.splitext(os.path.basename(args.model))[0]
     run_stamp = time.strftime("%Y%m%d_%H%M%S")
-    batch_dir = os.path.join(args.out_dir, f"batch_{run_stamp}")
+    batch_name = f"batch_{tag}_{model_stem}_{run_stamp}"
+    batch_dir = os.path.join(args.out_dir, batch_name)
     os.makedirs(batch_dir, exist_ok=True)
+    print(f"Batch tag: {tag}  |  model: {model_stem}  |  output: {batch_dir}")
 
     summaries = []
 
@@ -81,7 +101,7 @@ def main():
         print("\nNo successful runs to aggregate.")
         return
 
-    agg_path = os.path.join(batch_dir, "aggregate_summary.csv")
+    agg_path = os.path.join(batch_dir, f"aggregate_summary_{tag}_{model_stem}.csv")
     fieldnames = list(summaries[0].keys())
     with open(agg_path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -90,7 +110,7 @@ def main():
 
     means = [s["pos_error_mean_m"] for s in summaries]
     steady = [s["steady_state_mean_m"] for s in summaries]
-    print(f"\n=== {len(summaries)}/{args.runs} runs succeeded ===")
+    print(f"\n=== {len(summaries)}/{args.runs} runs succeeded ({tag}, {model_stem}) ===")
     print(f"Per-run mean pos error (m): {[round(m, 4) for m in means]}")
     print(f"Per-run steady-state mean (m): {[round(s, 4) for s in steady]}")
     print(f"Aggregate table written to: {agg_path}")

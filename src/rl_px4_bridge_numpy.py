@@ -301,6 +301,7 @@ async def run(npz_path: str, log_dir: str | None):
             second_half = errs[len(errs) // 2:]
             summary = {
                 "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+                "loader": "numpy",
                 "model_path": npz_path,
                 "model_sha256": sha256_of_file(npz_path),
                 "control_rate_hz": CONTROL_RATE_HZ,
