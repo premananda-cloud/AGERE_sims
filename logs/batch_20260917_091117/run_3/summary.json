@@ -1,0 +1,22 @@
+{
+  "timestamp_utc": "2026-09-17T09:14:08.179711+00:00",
+  "model_path": "../model/hover_policy.npz",
+  "model_sha256": "06005a230d5c32754a6395220ed0f29073593e8b428d43ed0a831717ff0f2ccf",
+  "control_rate_hz": 30.0,
+  "max_speed_mps": 0.25,
+  "episode_duration_s": 30.0,
+  "target_altitude_m": 1.0,
+  "target_xyz_train_frame": [
+    0.08522985130548477,
+    -0.08292049169540405,
+    0.8857877254486084
+  ],
+  "n_steps": 881,
+  "pos_error_mean_m": 0.06915991303746702,
+  "pos_error_std_m": 0.02004226751234615,
+  "pos_error_min_m": 0.012040513567626476,
+  "pos_error_max_m": 0.10726094990968704,
+  "pos_error_rmse_m": 0.07200545853188108,
+  "steady_state_mean_m": 0.07229078526433363,
+  "steady_state_std_m": 0.018745016143790406
+}
